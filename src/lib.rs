@@ -210,7 +210,7 @@ impl State {
         
             // NEW!
             render_pass.set_pipeline(&self.render_pipeline); // 2.
-            render_pass.draw(0..3, 0..1); // 3.
+            render_pass.draw(0..6, 0..1); // Draw all six vertices for both triangles
         }
 
         self.queue.submit(iter::once(encoder.finish()));

@@ -1,7 +1,8 @@
 // use std::iter;
 use std::iter;
+use std::time::{Instant, Duration};
 
-use std::fmt::Debug;
+// use std::fmt::Debug;
 
 use winit::{
     event::*,
@@ -19,6 +20,7 @@ struct State {
     // it gets dropped after it as the surface contains
     // unsafe references to the window's resources.
     window: Window,
+    render_pipeline: wgpu::RenderPipeline,
 }
 
 impl State {
@@ -41,12 +43,14 @@ impl State {
 
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::default(),
+                power_preference: wgpu::PowerPreference::HighPerformance,
                 compatible_surface: Some(&surface),
                 force_fallback_adapter: false,
             })
             .await
             .unwrap();
+
+        println!("adapter name: {}", adapter.get_info().name);
 
         let (device, queue) = adapter
             .request_device(
@@ -88,6 +92,53 @@ impl State {
         };
         surface.configure(&device, &config);
 
+        let shader = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
+
+        let render_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Render Pipeline Layout"),
+            bind_group_layouts: &[],
+            push_constant_ranges: &[],
+        });
+
+        let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Render Pipeline"),
+            layout: Some(&render_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: "vs_main", // 1.
+                buffers: &[], // 2.
+            },
+            fragment: Some(wgpu::FragmentState { // 3.
+                module: &shader,
+                entry_point: "fs_main",
+                targets: &[Some(wgpu::ColorTargetState { // 4.
+                    format: config.format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList, // 1.
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw, // 2.
+                cull_mode: Some(wgpu::Face::Back),
+                // Setting this to anything other than Fill requires Features::NON_FILL_POLYGON_MODE
+                polygon_mode: wgpu::PolygonMode::Fill,
+                // Requires Features::DEPTH_CLIP_CONTROL
+                unclipped_depth: false,
+                // Requires Features::CONSERVATIVE_RASTERIZATION
+                conservative: false,
+            },
+            depth_stencil: None, // 1.
+            multisample: wgpu::MultisampleState {
+                count: 1, // 2.
+                mask: !0, // 3.
+                alpha_to_coverage_enabled: false, // 4.
+            },
+            multiview: None, // 5.
+        });
+
         Self {
             surface,
             device,
@@ -95,6 +146,7 @@ impl State {
             config,
             size,
             window,
+            render_pipeline,
         }
     }
 
@@ -131,25 +183,34 @@ impl State {
             });
 
         {
-            let _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Render Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.3,
-                            g: 1.0,
-                            b: 0.3,
-                            a: 1.0,
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
+                color_attachments: &[
+                    // This is what @location(0) in the fragment shader targets
+                    Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(
+                                wgpu::Color {
+                                    r: 0.1,
+                                    g: 0.2,
+                                    b: 0.3,
+                                    a: 1.0,
+                                }
+                            ),
+                            store: wgpu::StoreOp::Store,
+                        }
+                    })
+                ],
                 depth_stencil_attachment: None,
                 occlusion_query_set: None,
                 timestamp_writes: None,
             });
+        
+            // NEW!
+            render_pass.set_pipeline(&self.render_pipeline); // 2.
+            render_pass.draw(0..3, 0..1); // 3.
         }
 
         self.queue.submit(iter::once(encoder.finish()));
@@ -161,18 +222,25 @@ impl State {
 
 
 
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen(start))]
+// #[cfg_attr(target_arch = "wasm32", wasm_bindgen(start))]
 pub async fn run() {
 
+    let mut last_frame_time = Instant::now();
+    let mut frame_count = 0;
+    let mut fps = 0.0;
 
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new().build(&event_loop).unwrap();
+    window.set_title("hello window");
 
 
     // State::new uses async code, so we're going to wait for it to finish
     let mut state = State::new(window).await;
 
     event_loop.run(move |event, _, control_flow| {
+
+
+        
         match event {
             Event::WindowEvent {
                 ref event,
@@ -180,6 +248,19 @@ pub async fn run() {
             } if window_id == state.window().id() => {
                 if !state.input(event) {
                     // UPDATED!
+
+                    // print fps
+                    let now = Instant::now();
+                    let delta_time = now - last_frame_time;
+                    last_frame_time = now;
+                    frame_count = frame_count + 1;
+                
+                    if delta_time >= Duration::from_secs(1) {
+                        fps = frame_count as f64 / delta_time.as_secs_f64();
+                        println!("FPS: {:.2}", fps);
+                        frame_count = 0;
+                    }
+
                     match event {
                         WindowEvent::CloseRequested
                         | WindowEvent::KeyboardInput {
@@ -203,6 +284,7 @@ pub async fn run() {
                 }
             }
             Event::RedrawRequested(window_id) if window_id == state.window().id() => {
+
                 state.update();
                 match state.render() {
                     Ok(_) => {}
@@ -225,3 +307,5 @@ pub async fn run() {
         }
     });
 }
+
+

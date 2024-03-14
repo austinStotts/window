@@ -8,6 +8,8 @@ use std::time::{SystemTime, Duration, Instant, UNIX_EPOCH};
 // use std::fmt::Debug;
 use wgpu::util::DeviceExt;
 use winit::dpi::LogicalSize;
+use winit::event;
+use winit::window::CursorGrabMode;
 use winit::{
     event::*,
     event_loop::{ControlFlow, EventLoop},
@@ -824,8 +826,10 @@ pub async fn run() {
     let mut last_frame_time = Instant::now();
     let mut frame_count: u64 = 0;
 
+    let mut mouse_locked = false;
+
     let event_loop = EventLoop::new();
-    let window = WindowBuilder::new().build(&event_loop).unwrap();
+    let window = WindowBuilder::new().build(&event_loop, ).unwrap();
     window.set_inner_size(LogicalSize::new(640.0, 360.0));
     window.set_title("hello window");
 
@@ -841,34 +845,57 @@ pub async fn run() {
             Event::DeviceEvent {
                 event: DeviceEvent::MouseMotion{ delta, },
                 .. // We're not using device_id currently
-            } => if state.mouse_pressed {
-                state.camera_controller.process_mouse(delta.0, delta.1)
+            } => {
+                if mouse_locked {
+                    state.camera_controller.process_mouse(delta.0, delta.1);
+                }
             }
 
             Event::WindowEvent {
                 ref event,
                 window_id,
-            } if window_id == state.window().id() && !state.input(event) => {
-                match event {
-                    #[cfg(not(target_arch="wasm32"))]
-                    WindowEvent::CloseRequested
-                    | WindowEvent::KeyboardInput {
-                        input:
-                            KeyboardInput {
-                                state: ElementState::Pressed,
-                                virtual_keycode: Some(VirtualKeyCode::Escape),
-                                ..
-                            },
-                        ..
-                    } => *control_flow = ControlFlow::Exit,
-                    WindowEvent::Resized(physical_size) => {
-                        state.resize(*physical_size);
-                    }
-                    WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
-                        state.resize(**new_inner_size);
-                    }
-                    _ => {}
+            } if window_id == state.window().id() && !state.input(event) => match event {
+                #[cfg(not(target_arch="wasm32"))]
+                WindowEvent::CloseRequested
+                | WindowEvent::KeyboardInput {
+                    input:
+                        KeyboardInput {
+                            state: ElementState::Pressed,
+                            virtual_keycode: Some(VirtualKeyCode::Escape),
+                            ..
+                        },
+                    ..
+                } => *control_flow = ControlFlow::Exit,
+                WindowEvent::Resized(physical_size) => {
+                    state.resize(*physical_size);
                 }
+                WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
+                    state.resize(**new_inner_size);
+                }
+                WindowEvent::Focused(focused) => {
+                    if *focused {
+                        if mouse_locked {
+                            state.window().set_cursor_grab(CursorGrabMode::Locked).unwrap();
+                            state.window().set_cursor_visible(false);
+                        } else {
+                            mouse_locked = false;
+                            state.window().set_cursor_grab(CursorGrabMode::None).unwrap();
+                            state.window().set_cursor_visible(true);
+                        }
+                    }
+                }
+                WindowEvent::MouseInput { button, state, .. } => {
+                    match (button, state) {
+                        (MouseButton::Left, ElementState::Pressed) => {
+                            mouse_locked = true;
+                            state.window().set_cursor_grab(CursorGrabMode::Locked).unwrap();
+                            state.window().set_cursor_visible(false);
+                        }
+                        _ => (),
+                    }
+                }
+                _ => {}
+                
             }
 
             Event::RedrawRequested(window_id) if window_id == state.window().id() => {

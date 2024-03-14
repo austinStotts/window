@@ -13,7 +13,7 @@ pub const OPENGL_TO_WGPU_MATRIX: cgmath::Matrix4<f32> = cgmath::Matrix4::new(
 );
 
 const SAFE_FRAC_PI_2: f32 = FRAC_PI_2 - 0.0001;
-
+const SENS: f32 = 0.35;
 
 #[derive(Debug)]
 pub struct Camera {
@@ -152,8 +152,8 @@ impl CameraController {
     }
 
     pub fn process_mouse(&mut self, mouse_dx: f64, mouse_dy: f64) {
-        self.rotate_horizontal = mouse_dx as f32;
-        self.rotate_vertical = mouse_dy as f32;
+        self.rotate_horizontal = mouse_dx as f32 * SENS;
+        self.rotate_vertical = mouse_dy as f32 * SENS;
     }
 
     pub fn process_scroll(&mut self, delta: &MouseScrollDelta) {

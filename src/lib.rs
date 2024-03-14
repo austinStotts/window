@@ -255,7 +255,7 @@ struct State {
     light_bind_group: wgpu::BindGroup,
     light_render_pipeline: wgpu::RenderPipeline,
     debug_material: model::Material,
-    mouse_pressed: bool,
+    mouse_locked: bool,
 }
 
 impl State {
@@ -649,7 +649,7 @@ impl State {
             light_bind_group,
             light_render_pipeline,
             debug_material,
-            mouse_pressed: false,
+            mouse_locked: false,
         }
     }
 
@@ -672,14 +672,18 @@ impl State {
     fn input(&mut self, event: &WindowEvent) -> bool {
         match event {
             WindowEvent::KeyboardInput {
-                input:
-                    KeyboardInput {
-                        virtual_keycode: Some(key),
-                        state,
-                        ..
-                    },
-                ..
-            } => self.camera_controller.process_keyboard(*key, *state),
+                input:KeyboardInput { virtual_keycode: Some(key), state,..},..
+            } => {
+                if *key == VirtualKeyCode::Escape {
+                    self.mouse_locked = false;
+                    self.window().set_cursor_grab(CursorGrabMode::None).unwrap();
+                    self.window().set_cursor_visible(true);
+                    true
+                } else {
+                    self.camera_controller.process_keyboard(*key, *state)
+                }
+                
+            },
             WindowEvent::MouseWheel { delta, .. } => {
                 self.camera_controller.process_scroll(delta);
                 true
@@ -689,7 +693,12 @@ impl State {
                 state,
                 ..
             } => {
-                self.mouse_pressed = *state == ElementState::Pressed;
+
+                if self.window().has_focus() & !self.mouse_locked {
+                    self.mouse_locked = true;
+                    self.window().set_cursor_grab(CursorGrabMode::Confined).unwrap();
+                    self.window().set_cursor_visible(false);
+                }
                 true
             }
             _ => false,
@@ -826,8 +835,6 @@ pub async fn run() {
     let mut last_frame_time = Instant::now();
     let mut frame_count: u64 = 0;
 
-    let mut mouse_locked = false;
-
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new().build(&event_loop, ).unwrap();
     window.set_inner_size(LogicalSize::new(640.0, 360.0));
@@ -846,7 +853,8 @@ pub async fn run() {
                 event: DeviceEvent::MouseMotion{ delta, },
                 .. // We're not using device_id currently
             } => {
-                if mouse_locked {
+                // println!("WINDOW EVENT! |mouse motion|");
+                if state.mouse_locked {
                     state.camera_controller.process_mouse(delta.0, delta.1);
                 }
             }
@@ -855,45 +863,40 @@ pub async fn run() {
                 ref event,
                 window_id,
             } if window_id == state.window().id() && !state.input(event) => match event {
-                #[cfg(not(target_arch="wasm32"))]
-                WindowEvent::CloseRequested
-                | WindowEvent::KeyboardInput {
-                    input:
-                        KeyboardInput {
-                            state: ElementState::Pressed,
-                            virtual_keycode: Some(VirtualKeyCode::Escape),
-                            ..
-                        },
-                    ..
-                } => *control_flow = ControlFlow::Exit,
+                WindowEvent::CloseRequested => *control_flow = ControlFlow::Exit,
+
                 WindowEvent::Resized(physical_size) => {
                     state.resize(*physical_size);
                 }
+
                 WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
                     state.resize(**new_inner_size);
                 }
+
                 WindowEvent::Focused(focused) => {
+                    println!("WINDOW EVENT! |focused|");
                     if *focused {
-                        if mouse_locked {
-                            state.window().set_cursor_grab(CursorGrabMode::Locked).unwrap();
-                            state.window().set_cursor_visible(false);
-                        } else {
-                            mouse_locked = false;
-                            state.window().set_cursor_grab(CursorGrabMode::None).unwrap();
-                            state.window().set_cursor_visible(true);
-                        }
+                        
+                        state.mouse_locked = true;
+                        state.window().set_cursor_grab(CursorGrabMode::Confined).unwrap();
+                        state.window().set_cursor_visible(false);   
+
+                
+                    } else {
+                        state.mouse_locked = false;
+                        state.window().set_cursor_grab(CursorGrabMode::None).unwrap();
+                        state.window().set_cursor_visible(true);
                     }
                 }
-                WindowEvent::MouseInput { button, state, .. } => {
-                    match (button, state) {
-                        (MouseButton::Left, ElementState::Pressed) => {
-                            mouse_locked = true;
-                            state.window().set_cursor_grab(CursorGrabMode::Locked).unwrap();
-                            state.window().set_cursor_visible(false);
-                        }
-                        _ => (),
-                    }
-                }
+
+                // WindowEvent::MouseInput { button, state: mouse_state, .. } => {
+                //     match (button, mouse_state) {
+                //         (MouseButton::Left, ElementState::Pressed) => {
+
+                //         }
+                //         _ => (),
+                //     }
+                // }
                 _ => {}
                 
             }
@@ -914,6 +917,7 @@ pub async fn run() {
                             println!("FPS: {:.2}", x);
                             frame_count = 0;
                             last_frame_time = Instant::now();
+                            // println!("mouse locked? {mouse_locked}");
                         }
                     }
 

@@ -26,19 +26,17 @@ use model::{DrawModel, Vertex};
 
 
 
-const NUM_INSTANCES_PER_ROW: u32 = 10;
+const NUM_INSTANCES_PER_ROW: u32 = 50;
 // const INSTANCE_DISPLACEMENT: cgmath::Vector3<f32> = cgmath::Vector3::new(NUM_INSTANCES_PER_ROW as f32 * 0.25, 0.0, NUM_INSTANCES_PER_ROW as f32 * 0.25);
-const ROTATION_SPEED: f32 = 0.25 * std::f32::consts::PI / 60.0;
+const ROTATION_SPEED: f32 = 0.05 * std::f32::consts::PI / 60.0;
 
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct LightUniform {
     position: [f32; 3],
-    // Due to uniforms requiring 16 byte (4 float) spacing, we need to use a padding field here
     _padding: u32,
     color: [f32; 3],
-    // Due to uniforms requiring 16 byte (4 float) spacing, we need to use a padding field here
     _padding2: u32,
 }
 
@@ -482,7 +480,7 @@ impl State {
         let camera = Camera {
             // position the camera 1 unit up and 2 units back
             // +z is out of the screen
-            eye: (0.0, 1.0, 2.0).into(),
+            eye: (0.0, 5.0, 0.1).into(),
             // have it look at the origin
             target: (0.0, 0.0, 0.0).into(),
             // which way is "up"
@@ -539,7 +537,7 @@ impl State {
         let light_uniform = LightUniform {
             position: [2.0, 2.0, 2.0],
             _padding: 0,
-            color: [1.0, 1.0, 1.0],
+            color: [0.3, 0.1, 0.2],
             _padding2: 0,
         };
         
@@ -752,12 +750,12 @@ impl State {
         self.queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[self.camera_uniform]));
 
         // Update the light
-        let old_position: cgmath::Vector3<_> = self.light_uniform.position.into();
-        self.light_uniform.position =
-            (cgmath::Quaternion::from_axis_angle((0.0, 1.0, 0.0).into(), cgmath::Deg(1.0))
-                * old_position)
-                .into();
-        self.queue.write_buffer(&self.light_buffer, 0, bytemuck::cast_slice(&[self.light_uniform]));
+        // let old_position: cgmath::Vector3<_> = self.light_uniform.position.into();
+        // self.light_uniform.position =
+        //     (cgmath::Quaternion::from_axis_angle((0.0, 1.0, 0.0).into(), cgmath::Deg(1.0))
+        //         * old_position)
+        //         .into();
+        // self.queue.write_buffer(&self.light_buffer, 0, bytemuck::cast_slice(&[self.light_uniform]));
  
 
         for instance in &mut self.instances {
@@ -818,9 +816,9 @@ impl State {
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Clear(
                                 wgpu::Color {
-                                    r: 0.9,
-                                    g: 0.9,
-                                    b: 0.9,
+                                    r: 0.0,
+                                    g: 0.0,
+                                    b: 0.0,
                                     a: 1.0,
                                 }
                             ),
@@ -877,7 +875,7 @@ pub async fn run() {
 
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new().build(&event_loop).unwrap();
-    window.set_inner_size(LogicalSize::new(640.0, 360.0));
+    window.set_inner_size(LogicalSize::new(1920.0, 1080.0));
     window.set_title("hello window");
 
 

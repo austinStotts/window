@@ -346,7 +346,7 @@ struct State {
 
 impl State {
     // Creating some of the wgpu types requires async code
-    async fn new(window: Window) -> Self {
+    async fn new(window: Window) -> anyhow::Result<Self> {
         let size = window.inner_size();
 
         // The instance is a handle to our GPU
@@ -789,7 +789,7 @@ impl State {
 
 
 
-        Self {
+        Ok(Self {
             surface,
             device,
             queue,
@@ -817,7 +817,7 @@ impl State {
             hdr,
             environment_bind_group,
             sky_pipeline,
-        }
+        })
     }
 
     pub fn window(&self) -> &Window {
@@ -1016,7 +1016,7 @@ pub async fn run() {
 
 
     // State::new uses async code, so we're going to wait for it to finish
-    let mut state = State::new(window).await;
+    let mut state = State::new(window).await.unwrap();
     let mut last_render_time = Instant::now(); 
 
     event_loop.run(move |event, _, control_flow| {

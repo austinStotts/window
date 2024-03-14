@@ -1,7 +1,7 @@
 // use std::iter;
 use std::iter;
 use std::time::{SystemTime, Duration, Instant, UNIX_EPOCH};
-
+use anyhow::Result;
 
 
 // use texture::Texture;
@@ -134,6 +134,75 @@ impl model::Vertex for InstanceRaw {
 
 
 
+pub struct CubeTexture {
+    texture: wgpu::Texture,
+    sampler: wgpu::Sampler,
+    view: wgpu::TextureView,
+}
+
+impl CubeTexture {
+    pub fn create_2d(
+        device: &wgpu::Device,
+        width: u32,
+        height: u32,
+        format: wgpu::TextureFormat,
+        mip_level_count: u32,
+        usage: wgpu::TextureUsages,
+        mag_filter: wgpu::FilterMode,
+        label: Option<&str>,
+    ) -> Self {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label,
+            size: wgpu::Extent3d {
+                width,
+                height,
+                // A cube has 6 sides, so we need 6 layers
+                depth_or_array_layers: 6,
+            },
+            mip_level_count,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage,
+            view_formats: &[],
+        });
+
+        let view = texture.create_view(&wgpu::TextureViewDescriptor {
+            label,
+            dimension: Some(wgpu::TextureViewDimension::Cube),
+            array_layer_count: Some(6),
+            ..Default::default()
+        });
+
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label,
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter,
+            min_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
+
+        Self {
+            texture,
+            sampler,
+            view,
+        }
+    }
+
+    pub fn texture(&self) -> &wgpu::Texture { &self.texture }
+    
+    pub fn view(&self) -> &wgpu::TextureView { &self.view }
+
+    pub fn sampler(&self) -> &wgpu::Sampler { &self.sampler }
+
+}
+
+
+
+
 
 
 
@@ -152,20 +221,33 @@ pub const OPENGL_TO_WGPU_MATRIX: cgmath::Matrix4<f32> = cgmath::Matrix4::new(
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct CameraUniform {
     view_position: [f32; 4],
+    view: [[f32; 4]; 4], // NEW!
     view_proj: [[f32; 4]; 4],
+    inv_proj: [[f32; 4]; 4], // NEW!
+    inv_view: [[f32; 4]; 4], // NEW!
 }
 
 impl CameraUniform {
     fn new() -> Self {
         Self {
             view_position: [0.0; 4],
+            view: cgmath::Matrix4::identity().into(),
             view_proj: cgmath::Matrix4::identity().into(),
+            inv_proj: cgmath::Matrix4::identity().into(), // NEW!
+            inv_view: cgmath::Matrix4::identity().into(), // NEW!
         }
     }
 
+    // UPDATED!
     fn update_view_proj(&mut self, camera: &camera::Camera, projection: &camera::Projection) {
         self.view_position = camera.position.to_homogeneous().into();
-        self.view_proj = (projection.calc_matrix() * camera.calc_matrix()).into();
+        let proj = projection.calc_matrix();
+        let view = camera.calc_matrix();
+        let view_proj = proj * view;
+        self.view = view.into();
+        self.view_proj = view_proj.into();
+        self.inv_proj = proj.invert().unwrap().into();
+        self.inv_view = view.transpose().into();
     }
 }
 
@@ -177,13 +259,13 @@ fn create_render_pipeline(
     color_format: wgpu::TextureFormat,
     depth_format: Option<wgpu::TextureFormat>,
     vertex_layouts: &[wgpu::VertexBufferLayout],
-    topology: wgpu::PrimitiveTopology, 
+    topology: wgpu::PrimitiveTopology, // NEW!
     shader: wgpu::ShaderModuleDescriptor,
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(shader);
 
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("Render Pipeline"),
+        label: Some(&format!("{:?}", shader)),
         layout: Some(layout),
         vertex: wgpu::VertexState {
             module: &shader,
@@ -195,15 +277,12 @@ fn create_render_pipeline(
             entry_point: "fs_main",
             targets: &[Some(wgpu::ColorTargetState {
                 format: color_format,
-                blend: Some(wgpu::BlendState {
-                    alpha: wgpu::BlendComponent::REPLACE,
-                    color: wgpu::BlendComponent::REPLACE,
-                }),
+                blend: None,
                 write_mask: wgpu::ColorWrites::ALL,
             })],
         }),
         primitive: wgpu::PrimitiveState {
-            topology,
+            topology, // NEW!
             strip_index_format: None,
             front_face: wgpu::FrontFace::Ccw,
             cull_mode: Some(wgpu::Face::Back),
@@ -217,7 +296,7 @@ fn create_render_pipeline(
         depth_stencil: depth_format.map(|format| wgpu::DepthStencilState {
             format,
             depth_write_enabled: true,
-            depth_compare: wgpu::CompareFunction::Less,
+            depth_compare: wgpu::CompareFunction::LessEqual, // UDPATED!
             stencil: wgpu::StencilState::default(),
             bias: wgpu::DepthBiasState::default(),
         }),
@@ -226,6 +305,8 @@ fn create_render_pipeline(
             mask: !0,
             alpha_to_coverage_enabled: false,
         },
+        // If the pipeline will be used with a multiview render pass, this
+        // indicates how many array layers the attachments will have.
         multiview: None,
     })
 }
@@ -259,6 +340,8 @@ struct State {
     debug_material: model::Material,
     mouse_locked: bool,
     hdr: hdr::HdrPipeline,
+    environment_bind_group: wgpu::BindGroup,
+    sky_pipeline: wgpu::RenderPipeline,
 }
 
 impl State {
@@ -294,16 +377,9 @@ impl State {
             .request_device(
                 &wgpu::DeviceDescriptor {
                     label: None,
-                    features: wgpu::Features::empty(),
-                    // WebGL doesn't support all of wgpu's features, so if
-                    // we're building for the web we'll have to disable some.
-                    limits: if cfg!(target_arch = "wasm32") {
-                        wgpu::Limits::downlevel_webgl2_defaults()
-                    } else {
-                        wgpu::Limits::default()
-                    },
+                    features: wgpu::Features::all_webgpu_mask(),
+                    limits: wgpu::Limits::downlevel_defaults(),
                 },
-                // Some(&std::path::Path::new("trace")), // Trace path
                 None,
             )
             .await
@@ -554,7 +630,19 @@ impl State {
 
 
 
+        // let hdr = hdr::HdrPipeline::new(&device, &config);
+        // NEW!
         let hdr = hdr::HdrPipeline::new(&device, &config);
+
+        let hdr_loader = resources::HdrLoader::new(&device);
+        let sky_bytes = resources::load_binary("pure-sky.hdr").await?;
+        let sky_texture = hdr_loader.from_equirectangular_bytes(
+            &device,
+            &queue,
+            &sky_bytes,
+            1080,
+            Some("Sky Texture"),
+        )?;
 
 
 
@@ -619,7 +707,7 @@ impl State {
         // MATERIAL SETTINGS
 
         let debug_material = {
-            let diffuse_bytes = include_bytes!("../res/cobble-diffuse.png");
+            let diffuse_bytes = include_bytes!("./happy-tree.png");
             let normal_bytes = include_bytes!("../res/cobble-normal.png");
 
             let diffuse_texture = texture::Texture::from_bytes(&device, &queue, diffuse_bytes, "res/alt-diffuse.png", false).unwrap();
@@ -630,6 +718,71 @@ impl State {
 
 
 
+
+
+
+
+
+
+
+
+        let environment_layout =
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("environment_layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::Cube,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
+                    count: None,
+                },
+            ],
+        });
+    
+        let environment_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("environment_bind_group"),
+            layout: &environment_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&sky_texture.view()),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(sky_texture.sampler()),
+                },
+            ],
+        });
+    
+
+        // NEW!
+        let sky_pipeline = {
+            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Sky Pipeline Layout"),
+                bind_group_layouts: &[&camera_bind_group_layout, &environment_layout],
+                push_constant_ranges: &[],
+            });
+            let shader = wgpu::include_wgsl!("sky.wgsl");
+            create_render_pipeline(
+                &device,
+                &layout,
+                hdr.format(),
+                Some(texture::Texture::DEPTH_FORMAT),
+                &[],
+                wgpu::PrimitiveTopology::TriangleList,
+                shader,
+            )
+        };
 
 
 
@@ -662,6 +815,8 @@ impl State {
             debug_material,
             mouse_locked: false,
             hdr,
+            environment_bind_group,
+            sky_pipeline,
         }
     }
 

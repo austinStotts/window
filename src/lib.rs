@@ -24,6 +24,7 @@ mod texture;
 mod model;
 mod resources;
 mod camera;
+mod hdr;
 
 use model::{DrawModel, Vertex};
 
@@ -176,6 +177,7 @@ fn create_render_pipeline(
     color_format: wgpu::TextureFormat,
     depth_format: Option<wgpu::TextureFormat>,
     vertex_layouts: &[wgpu::VertexBufferLayout],
+    topology: wgpu::PrimitiveTopology, 
     shader: wgpu::ShaderModuleDescriptor,
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(shader);
@@ -201,7 +203,7 @@ fn create_render_pipeline(
             })],
         }),
         primitive: wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleList,
+            topology,
             strip_index_format: None,
             front_face: wgpu::FrontFace::Ccw,
             cull_mode: Some(wgpu::Face::Back),
@@ -256,6 +258,7 @@ struct State {
     light_render_pipeline: wgpu::RenderPipeline,
     debug_material: model::Material,
     mouse_locked: bool,
+    hdr: hdr::HdrPipeline,
 }
 
 impl State {
@@ -551,7 +554,7 @@ impl State {
 
 
 
-
+        let hdr = hdr::HdrPipeline::new(&device, &config);
 
 
 
@@ -568,9 +571,10 @@ impl State {
             create_render_pipeline(
                 &device,
                 &render_pipeline_layout,
-                config.format,
+                hdr.format(),
                 Some(texture::Texture::DEPTH_FORMAT),
                 &[model::ModelVertex::desc(), InstanceRaw::desc()],
+                wgpu::PrimitiveTopology::TriangleList,
                 shader,
             )
         };
@@ -589,9 +593,10 @@ impl State {
             create_render_pipeline(
                 &device,
                 &layout,
-                config.format,
+                hdr.format(),
                 Some(texture::Texture::DEPTH_FORMAT),
                 &[model::ModelVertex::desc()],
+                wgpu::PrimitiveTopology::TriangleList,
                 shader,
             )
         };
@@ -625,6 +630,12 @@ impl State {
 
 
 
+
+
+
+
+
+
         Self {
             surface,
             device,
@@ -650,6 +661,7 @@ impl State {
             light_render_pipeline,
             debug_material,
             mouse_locked: false,
+            hdr,
         }
     }
 
@@ -665,6 +677,7 @@ impl State {
             self.surface.configure(&self.device, &self.config);
             self.depth_texture = texture::Texture::create_depth_texture(&self.device, &self.config, "depth_texture");
             self.projection.resize(new_size.width, new_size.height);
+            self.hdr.resize(&self.device, new_size.width, new_size.height);
         }
     }
 
@@ -713,9 +726,14 @@ impl State {
         // Update the light
         let old_position: cgmath::Vector3<_> = self.light_uniform.position.into();
         self.light_uniform.position =
-            (cgmath::Quaternion::from_axis_angle((0.0, 1.0, 0.0).into(), cgmath::Deg(60.0 * dt.as_secs_f32()))
-            * old_position).into();
-        self.queue.write_buffer(&self.light_buffer, 0, bytemuck::cast_slice(&[self.light_uniform]));
+            (cgmath::Quaternion::from_axis_angle((0.0, 3.0, 0.0).into(), cgmath::Deg(1.0))
+                * old_position)
+                .into();
+        self.queue.write_buffer(
+            &self.light_buffer,
+            0,
+            bytemuck::cast_slice(&[self.light_uniform]),
+        );
  
  
 
@@ -772,7 +790,7 @@ impl State {
                 color_attachments: &[
                     // This is what @location(0) in the fragment shader targets
                     Some(wgpu::RenderPassColorAttachment {
-                        view: &view,
+                        view: self.hdr.view(),
                         resolve_target: None,
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Clear(
@@ -819,6 +837,7 @@ impl State {
             );
         }
 
+        self.hdr.process(&mut encoder, &view);
         self.queue.submit(iter::once(encoder.finish()));
         output.present();
 

@@ -13,7 +13,7 @@ pub const OPENGL_TO_WGPU_MATRIX: cgmath::Matrix4<f32> = cgmath::Matrix4::new(
 );
 
 const SAFE_FRAC_PI_2: f32 = FRAC_PI_2 - 0.0001;
-const SENS: f32 = 0.35;
+const SENS: f32 = 0.5;
 
 #[derive(Debug)]
 pub struct Camera {
